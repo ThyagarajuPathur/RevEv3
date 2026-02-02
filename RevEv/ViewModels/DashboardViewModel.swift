@@ -25,6 +25,7 @@ class DashboardViewModel: ObservableObject {
     // MARK: - Services
 
     var bluetooth = BluetoothService()
+    var obdProtocol: OBDProtocolService!
     let audioEngine = AudioEngine()
 
     // MARK: - Private Properties
@@ -37,6 +38,7 @@ class DashboardViewModel: ObservableObject {
     // MARK: - Initialization
 
     init() {
+        obdProtocol = OBDProtocolService(bluetoothService: bluetooth)
         setupBindings()
         setupDisplayLink()
     }
@@ -44,8 +46,16 @@ class DashboardViewModel: ObservableObject {
     // MARK: - Setup
 
     private func setupBindings() {
-        // Observe Bluetooth RPM changes
-        bluetooth.$currentRPM
+        // Observe Bluetooth connection state changes
+        bluetooth.$connectionState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.handleConnectionStateChange(state)
+            }
+            .store(in: &cancellables)
+
+        // Observe OBD RPM changes
+        obdProtocol.$rpm
             .receive(on: DispatchQueue.main)
             .sink { [weak self] rpm in
                 guard let self = self, !self.isDemoMode else { return }
@@ -65,6 +75,38 @@ class DashboardViewModel: ObservableObject {
 
         let currentRPM = isDemoMode ? demoRPM : rpm
         audioEngine.applySounds(rpm: currentRPM, throttle: throttle)
+    }
+
+    // MARK: - Connection State Handling
+
+    private func handleConnectionStateChange(_ state: ConnectionState) {
+        print("DEBUG: Connection state changed to: \(state.displayText)")
+
+        switch state {
+        case .initializing:
+            // Auto-initialize the adapter
+            Task {
+                do {
+                    try await obdProtocol.initializeAdapter()
+                } catch {
+                    print("DEBUG: Adapter initialization failed: \(error)")
+                }
+            }
+        case .connected:
+            // Start polling when connected and initialized
+            if obdProtocol.isInitialized && !obdProtocol.isPolling {
+                obdProtocol.startPolling()
+            }
+            // Auto-start audio
+            if !isPlaying && !isDemoMode {
+                start()
+            }
+        case .disconnected:
+            // Stop polling on disconnect
+            obdProtocol.stopPolling()
+        default:
+            break
+        }
     }
 
     // MARK: - Public Methods
@@ -112,7 +154,7 @@ class DashboardViewModel: ObservableObject {
         isDemoMode.toggle()
 
         if !isDemoMode {
-            bluetooth.startAutoConnect()
+            bluetooth.startScanning()
         }
     }
 
@@ -168,6 +210,7 @@ class DashboardViewModel: ObservableObject {
 
     /// Disconnect from Bluetooth device
     func disconnectBluetooth() {
+        obdProtocol.stopPolling()
         bluetooth.disconnect()
     }
 
@@ -191,6 +234,10 @@ class DashboardViewModel: ObservableObject {
 
     var currentDisplayRPM: Double {
         isDemoMode ? demoRPM : rpm
+    }
+
+    var isPolling: Bool {
+        obdProtocol.isPolling
     }
 
     // MARK: - Cleanup
