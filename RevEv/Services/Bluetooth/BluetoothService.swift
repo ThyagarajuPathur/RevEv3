@@ -46,7 +46,29 @@ final class BluetoothService: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        centralManager = CBCentralManager(delegate: self, queue: .main)
+        // Show power alert if Bluetooth is off, and trigger permission dialog
+        centralManager = CBCentralManager(
+            delegate: self,
+            queue: .main,
+            options: [CBCentralManagerOptionShowPowerAlertKey: true]
+        )
+        print("DEBUG: BluetoothService initialized, authorization: \(CBCentralManager.authorization.rawValue)")
+    }
+
+    /// Check Bluetooth authorization status
+    static var authorizationStatus: String {
+        switch CBCentralManager.authorization {
+        case .notDetermined:
+            return "Not Determined"
+        case .restricted:
+            return "Restricted"
+        case .denied:
+            return "Denied - Go to Settings > Privacy > Bluetooth to enable"
+        case .allowedAlways:
+            return "Allowed"
+        @unknown default:
+            return "Unknown"
+        }
     }
 
     // MARK: - Auto-Connect
@@ -234,7 +256,7 @@ final class BluetoothService: NSObject, ObservableObject {
 
 extension BluetoothService: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        print("DEBUG: centralManagerDidUpdateState: \(central.state.rawValue)")
+        print("DEBUG: centralManagerDidUpdateState: \(central.state.rawValue), authorization: \(CBCentralManager.authorization.rawValue)")
 
         switch central.state {
         case .poweredOn:
@@ -249,16 +271,21 @@ extension BluetoothService: CBCentralManagerDelegate {
             }
         case .poweredOff:
             pendingScan = false
-            connectionState = .error("Bluetooth is turned off")
+            connectionState = .error("Turn on Bluetooth in Settings")
             cleanup()
         case .unauthorized:
             pendingScan = false
-            connectionState = .error("Bluetooth permission denied")
+            print("DEBUG: Bluetooth unauthorized. Authorization: \(BluetoothService.authorizationStatus)")
+            connectionState = .error("Enable Bluetooth in Settings > Privacy")
         case .unsupported:
             pendingScan = false
-            connectionState = .error("Bluetooth not supported")
-        default:
-            break
+            connectionState = .error("Bluetooth not supported on this device")
+        case .resetting:
+            print("DEBUG: Bluetooth resetting...")
+        case .unknown:
+            print("DEBUG: Bluetooth state unknown, waiting...")
+        @unknown default:
+            print("DEBUG: Unknown Bluetooth state: \(central.state.rawValue)")
         }
     }
 
