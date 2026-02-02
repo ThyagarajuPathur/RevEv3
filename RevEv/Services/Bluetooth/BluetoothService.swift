@@ -41,6 +41,7 @@ class BluetoothService: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        print("BluetoothService init - creating CBCentralManager")
         centralManager = CBCentralManager(delegate: self, queue: nil)
     }
 
@@ -48,11 +49,15 @@ class BluetoothService: NSObject, ObservableObject {
 
     /// Start scanning for OBD devices
     func startScanning() {
+        print("startScanning() called, centralManager.state = \(centralManager.state.rawValue)")
+
         guard centralManager.state == .poweredOn else {
+            print("Bluetooth not powered on, state: \(centralManager.state.rawValue)")
             connectionState = .error("Bluetooth not available")
             return
         }
 
+        print("Starting Bluetooth scan...")
         connectionState = .scanning
         discoveredDevices.removeAll()
 
@@ -63,6 +68,7 @@ class BluetoothService: NSObject, ObservableObject {
 
         // Stop scanning after 10 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            print("Scan timeout, stopping...")
             self?.stopScanning()
         }
     }
@@ -283,19 +289,29 @@ class BluetoothService: NSObject, ObservableObject {
 extension BluetoothService: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        print("centralManagerDidUpdateState: \(central.state.rawValue)")
+
         switch central.state {
         case .poweredOn:
+            print("Bluetooth powered on")
             if isAutoConnectEnabled {
                 startAutoConnect()
             }
         case .poweredOff:
+            print("Bluetooth powered off")
             connectionState = .error("Bluetooth is off")
         case .unauthorized:
+            print("Bluetooth unauthorized")
             connectionState = .error("Bluetooth unauthorized")
         case .unsupported:
+            print("Bluetooth unsupported")
             connectionState = .error("Bluetooth unsupported")
-        default:
-            break
+        case .resetting:
+            print("Bluetooth resetting")
+        case .unknown:
+            print("Bluetooth state unknown")
+        @unknown default:
+            print("Bluetooth unknown state: \(central.state.rawValue)")
         }
     }
 
