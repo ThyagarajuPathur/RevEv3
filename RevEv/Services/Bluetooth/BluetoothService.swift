@@ -29,6 +29,9 @@ final class BluetoothService: NSObject, ObservableObject {
     /// Continuation for async response waiting
     private var responseContinuation: CheckedContinuation<String, Error>?
 
+    /// Pending scan request (when user taps scan before Bluetooth is ready)
+    private var pendingScan = false
+
     /// Auto-connect settings
     var isAutoConnectEnabled: Bool = true
     private let lastDeviceKey = "RevEv.LastConnectedDeviceUUID"
@@ -100,12 +103,19 @@ final class BluetoothService: NSObject, ObservableObject {
     /// Start scanning for ELM327 devices
     func startScanning() {
         guard centralManager.state == .poweredOn else {
-            print("DEBUG: Bluetooth not ready, state: \(centralManager.state.rawValue)")
-            connectionState = .error("Bluetooth is not available")
+            print("DEBUG: Bluetooth not ready yet, state: \(centralManager.state.rawValue). Queuing scan...")
+            pendingScan = true
+            connectionState = .scanning  // Show scanning UI while waiting
             return
         }
 
+        performScan()
+    }
+
+    /// Actually perform the scan (called when Bluetooth is ready)
+    private func performScan() {
         print("DEBUG: Starting scan...")
+        pendingScan = false
         discoveredDevices.removeAll()
         connectionState = .scanning
 
@@ -229,17 +239,23 @@ extension BluetoothService: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             print("DEBUG: Bluetooth powered on")
-            // Auto-start scanning when Bluetooth is ready
-            if isAutoConnectEnabled && connectionState == .disconnected {
+            // Execute pending scan if user requested before Bluetooth was ready
+            if pendingScan {
+                print("DEBUG: Executing pending scan...")
+                performScan()
+            } else if isAutoConnectEnabled && connectionState == .disconnected {
                 print("DEBUG: Bluetooth ready, starting auto-scan...")
-                startScanning()
+                performScan()
             }
         case .poweredOff:
+            pendingScan = false
             connectionState = .error("Bluetooth is turned off")
             cleanup()
         case .unauthorized:
+            pendingScan = false
             connectionState = .error("Bluetooth permission denied")
         case .unsupported:
+            pendingScan = false
             connectionState = .error("Bluetooth not supported")
         default:
             break
