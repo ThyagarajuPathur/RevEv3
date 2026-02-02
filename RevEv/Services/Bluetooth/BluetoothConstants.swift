@@ -66,7 +66,7 @@ enum OBDCommand {
 
 /// Device name filters for OBD adapters
 enum OBDDeviceFilter {
-    static let knownPrefixes = ["OBD", "ELM", "Veepeak", "Vlink", "OBDII", "Car"]
+    static let knownPrefixes = ["OBD", "ELM", "Veepeak", "Vlink", "OBDII", "Car", "V-LINK", "VGATE", "Konnwei", "Adapter"]
 
     /// Check if a device name matches known OBD adapter patterns
     static func isOBDAdapter(name: String?) -> Bool {

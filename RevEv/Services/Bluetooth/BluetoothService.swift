@@ -25,8 +25,9 @@ class BluetoothService: NSObject, ObservableObject {
     private var isProcessingCommand = false
     private var commandCompletion: ((String) -> Void)?
     private var commandTimer: Timer?
+    private var lastCommandTask: Task<String, Error>?
 
-    private var pollingTimer: Timer?
+    private var isPolling = false
     private var reconnectTimer: Timer?
 
     private var useEVProtocol = true
@@ -118,16 +119,26 @@ class BluetoothService: NSObject, ObservableObject {
         startScanning()
     }
 
-    /// Send a command and wait for response
+    /// Send a command and wait for response (serialized)
     func sendCommand(_ command: String, timeout: TimeInterval = 5.0) async throws -> String {
+        let previousTask = lastCommandTask
+        let newTask = Task {
+            _ = try? await previousTask?.value
+            return try await sendCommandInternal(command, timeout: timeout)
+        }
+        lastCommandTask = newTask
+        return try await newTask.value
+    }
+
+    private func sendCommandInternal(_ command: String, timeout: TimeInterval = 5.0) async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
-            sendCommand(command, timeout: timeout) { response in
+            sendCommandInternal(command, timeout: timeout) { response in
                 continuation.resume(returning: response)
             }
         }
     }
 
-    private func sendCommand(_ command: String, timeout: TimeInterval = 5.0, completion: @escaping (String) -> Void) {
+    private func sendCommandInternal(_ command: String, timeout: TimeInterval = 5.0, completion: @escaping (String) -> Void) {
         guard let characteristic = writeCharacteristic,
               let peripheral = connectedPeripheral else {
             completion("")
@@ -191,24 +202,26 @@ class BluetoothService: NSObject, ObservableObject {
     // MARK: - RPM Polling
 
     func startPolling() {
-        stopPolling()
-
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
-            self?.pollRPM()
+        guard !isPolling else { return }
+        isPolling = true
+        
+        Task {
+            while isPolling {
+                await pollRPM()
+                try? await Task.sleep(nanoseconds: 70_000_000) // 70ms
+            }
         }
     }
 
     func stopPolling() {
-        pollingTimer?.invalidate()
-        pollingTimer = nil
+        isPolling = false
     }
 
-    private func pollRPM() {
-        Task {
-            let command = useEVProtocol ? OBDCommand.evRPM_EGMP : OBDCommand.standardRPM
-
-            do {
-                let response = try await sendCommand(command)
+    private func pollRPM() async {
+        let command = useEVProtocol ? OBDCommand.evRPM_EGMP : OBDCommand.standardRPM
+        
+        do {
+            let response = try await sendCommand(command)
 
                 if OBDResponse.isError(response) {
                     // Try alternate protocol
@@ -242,7 +255,6 @@ class BluetoothService: NSObject, ObservableObject {
             } catch {
                 print("Polling error: \(error)")
             }
-        }
     }
 
     // MARK: - Auto-Reconnect
