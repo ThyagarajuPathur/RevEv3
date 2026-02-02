@@ -1,17 +1,20 @@
+//
+//  BluetoothService.swift
+//  RevEv
+//
+
+import Foundation
 import CoreBluetooth
 import Combine
 
-/// Bluetooth service for OBD-II adapter communication
-class BluetoothService: NSObject, ObservableObject {
-
-    // MARK: - Published Properties
+/// Core Bluetooth management service for ELM327 adapters
+final class BluetoothService: NSObject, ObservableObject {
+    // MARK: - Published State
 
     @Published var connectionState: ConnectionState = .disconnected
+    @Published private(set) var discoveredDevices: [BluetoothDevice] = []
+    @Published private(set) var connectedDevice: BluetoothDevice?
     @Published var currentRPM: Int = 0
-    @Published var currentSpeed: Int = 0
-    @Published var isAutoConnectEnabled: Bool = true
-    @Published var discoveredDevices: [CBPeripheral] = []
-    @Published var connectedDeviceName: String?
 
     // MARK: - Private Properties
 
@@ -19,68 +22,108 @@ class BluetoothService: NSObject, ObservableObject {
     private var connectedPeripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
     private var notifyCharacteristic: CBCharacteristic?
+    private var preferredWriteType: CBCharacteristicWriteType = .withResponse
 
-    private var responseBuffer = ""
-    private var commandQueue: [String] = []
-    private var isProcessingCommand = false
-    private var commandCompletion: ((String) -> Void)?
-    private var commandTimer: Timer?
-    private var lastCommandTask: Task<String, Error>?
+    private var dataBuffer = Data()
 
-    private var isPolling = false
-    private var reconnectTimer: Timer?
+    /// Continuation for async response waiting
+    private var responseContinuation: CheckedContinuation<String, Error>?
 
-    private var useEVProtocol = true
-    private var consecutiveTimeouts = 0
-    private let maxTimeouts = 3
-    private var pendingScan = false
+    /// Auto-connect settings
+    var isAutoConnectEnabled: Bool = true
+    private let lastDeviceKey = "RevEv.LastConnectedDeviceUUID"
 
-    // UserDefaults keys
-    private let lastDeviceUUIDKey = "lastConnectedDeviceUUID"
+    // MARK: - Computed Properties
+
+    var connectedDeviceName: String? {
+        connectedDevice?.name
+    }
 
     // MARK: - Initialization
 
     override init() {
         super.init()
-        print("BluetoothService init - creating CBCentralManager")
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+        centralManager = CBCentralManager(delegate: self, queue: .main)
+    }
+
+    // MARK: - Auto-Connect
+
+    /// Get the last connected device UUID
+    private var lastConnectedDeviceUUID: UUID? {
+        get {
+            guard let uuidString = UserDefaults.standard.string(forKey: lastDeviceKey) else { return nil }
+            return UUID(uuidString: uuidString)
+        }
+        set {
+            UserDefaults.standard.set(newValue?.uuidString, forKey: lastDeviceKey)
+        }
+    }
+
+    /// Save the current device for auto-reconnect
+    private func saveLastDevice(_ device: BluetoothDevice) {
+        lastConnectedDeviceUUID = device.peripheral.identifier
+        print("DEBUG: Saved device for auto-connect: \(device.name)")
+    }
+
+    /// Check if device matches last connected or is a known OBD adapter
+    private func shouldAutoConnect(to device: BluetoothDevice) -> Bool {
+        // Priority 1: Last connected device
+        if let lastUUID = lastConnectedDeviceUUID, device.peripheral.identifier == lastUUID {
+            print("DEBUG: Found last connected device: \(device.name)")
+            return true
+        }
+
+        // Priority 2: Known OBD adapter names
+        let name = device.name.lowercased()
+        let isKnownOBD = name.contains("obd") ||
+                         name.contains("elm") ||
+                         name.contains("vlink") ||
+                         name.contains("veepeak") ||
+                         name.contains("ios-vlink")
+
+        if isKnownOBD {
+            print("DEBUG: Found known OBD adapter: \(device.name)")
+            return true
+        }
+
+        return false
     }
 
     // MARK: - Public Methods
 
-    /// Start scanning for OBD devices
-    func startScanning() {
-        print("startScanning() called, centralManager.state = \(centralManager.state.rawValue)")
+    /// Start auto-connect (try to connect to last known device)
+    func startAutoConnect() {
+        guard isAutoConnectEnabled else { return }
+        startScanning()
+    }
 
+    /// Start scanning for ELM327 devices
+    func startScanning() {
         guard centralManager.state == .poweredOn else {
-            print("Bluetooth not ready yet, queuing scan request...")
-            pendingScan = true
-            connectionState = .scanning  // Show scanning state in UI
+            print("DEBUG: Bluetooth not ready, state: \(centralManager.state.rawValue)")
+            connectionState = .error("Bluetooth is not available")
             return
         }
 
-        performScan()
-    }
-
-    private func performScan() {
-        print("Starting Bluetooth scan...")
-        pendingScan = false
-        connectionState = .scanning
+        print("DEBUG: Starting scan...")
         discoveredDevices.removeAll()
+        connectionState = .scanning
 
-        // Scan for all devices (we filter by name)
-        centralManager.scanForPeripherals(withServices: nil, options: [
-            CBCentralManagerScanOptionAllowDuplicatesKey: false
-        ])
+        centralManager.scanForPeripherals(
+            withServices: nil,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+        )
 
         // Stop scanning after 10 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-            print("Scan timeout, stopping...")
-            self?.stopScanning()
+            if self?.connectionState == .scanning {
+                print("DEBUG: Scan timeout")
+                self?.stopScanning()
+            }
         }
     }
 
-    /// Stop scanning
+    /// Stop scanning for devices
     func stopScanning() {
         centralManager.stopScan()
         if connectionState == .scanning {
@@ -88,392 +131,326 @@ class BluetoothService: NSObject, ObservableObject {
         }
     }
 
-    /// Connect to a specific peripheral
-    func connect(to peripheral: CBPeripheral) {
+    /// Connect to a specific device
+    func connect(to device: BluetoothDevice) {
         stopScanning()
         connectionState = .connecting
-        connectedPeripheral = peripheral
-        peripheral.delegate = self
-        centralManager.connect(peripheral, options: nil)
+        centralManager.connect(device.peripheral, options: nil)
     }
 
-    /// Disconnect from current peripheral
+    /// Disconnect from current device
     func disconnect() {
-        stopPolling()
-        reconnectTimer?.invalidate()
-
         if let peripheral = connectedPeripheral {
             centralManager.cancelPeripheralConnection(peripheral)
         }
+        cleanup()
+    }
 
+    /// Send a command and wait for response
+    @MainActor
+    func sendCommand(_ command: String, timeout: TimeInterval = 3.0) async throws -> String {
+        guard let writeChar = writeCharacteristic,
+              let peripheral = connectedPeripheral else {
+            throw BluetoothError.notConnected
+        }
+
+        // Cancel any pending continuation to prevent "multiple resumes" crash
+        if let pending = responseContinuation {
+            pending.resume(throwing: BluetoothError.timeout)
+            responseContinuation = nil
+        }
+
+        // Clear buffer before sending
+        dataBuffer.removeAll()
+
+        // Add carriage return to command
+        let commandData = "\(command)\r".data(using: .ascii)!
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.responseContinuation = continuation
+
+            peripheral.writeValue(commandData, for: writeChar, type: self.preferredWriteType)
+
+            // Timeout handling
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                guard let self = self else { return }
+                if self.responseContinuation != nil {
+                    let bufferContent = String(data: self.dataBuffer, encoding: .ascii) ?? "NON-ASCII"
+                    print("DEBUG: Command '\(command)' timed out after \(timeout)s. Buffer: [\(bufferContent)]")
+                    self.responseContinuation?.resume(throwing: BluetoothError.timeout)
+                    self.responseContinuation = nil
+                }
+            }
+        }
+    }
+
+    // MARK: - Private Methods
+
+    private func cleanup() {
         connectedPeripheral = nil
+        connectedDevice = nil
         writeCharacteristic = nil
         notifyCharacteristic = nil
+        dataBuffer.removeAll()
+        responseContinuation = nil
         connectionState = .disconnected
-        connectedDeviceName = nil
     }
 
-    /// Start auto-connect (try to connect to last known device)
-    func startAutoConnect() {
-        guard isAutoConnectEnabled else { return }
-        guard centralManager.state == .poweredOn else { return }
+    private func processReceivedData(_ data: Data) {
+        dataBuffer.append(data)
 
-        if let uuidString = UserDefaults.standard.string(forKey: lastDeviceUUIDKey),
-           let uuid = UUID(uuidString: uuidString) {
-            // Try to retrieve known peripheral
-            let peripherals = centralManager.retrievePeripherals(withIdentifiers: [uuid])
-            if let peripheral = peripherals.first {
-                connect(to: peripheral)
-                return
-            }
-        }
-
-        // Otherwise, scan and connect to first OBD device found
-        startScanning()
-    }
-
-    /// Send a command and wait for response (serialized)
-    func sendCommand(_ command: String, timeout: TimeInterval = 5.0) async throws -> String {
-        let previousTask = lastCommandTask
-        let newTask = Task {
-            _ = try? await previousTask?.value
-            return try await sendCommandInternal(command, timeout: timeout)
-        }
-        lastCommandTask = newTask
-        return try await newTask.value
-    }
-
-    private func sendCommandInternal(_ command: String, timeout: TimeInterval = 5.0) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            sendCommandInternal(command, timeout: timeout) { response in
-                continuation.resume(returning: response)
-            }
-        }
-    }
-
-    private func sendCommandInternal(_ command: String, timeout: TimeInterval = 5.0, completion: @escaping (String) -> Void) {
-        guard let characteristic = writeCharacteristic,
-              let peripheral = connectedPeripheral else {
-            completion("")
+        // Check for response terminator '>'
+        guard let responseString = String(data: dataBuffer, encoding: .ascii) else {
             return
         }
 
-        responseBuffer = ""
-        commandCompletion = completion
+        if responseString.contains(">") {
+            // Some devices send multiple lines before the '>'
+            // We want the whole response up to the '>'
+            let response = responseString
+                .replacingOccurrences(of: ">", with: "")
 
-        // Set timeout
-        commandTimer?.invalidate()
-        commandTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
-            self?.handleCommandTimeout()
-        }
+            dataBuffer.removeAll()
 
-        // Write command
-        if let data = command.data(using: .ascii) {
-            let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.writeWithoutResponse)
-                ? .withoutResponse : .withResponse
-            peripheral.writeValue(data, for: characteristic, type: writeType)
-        }
-    }
-
-    private func handleCommandTimeout() {
-        consecutiveTimeouts += 1
-        commandCompletion?("")
-        commandCompletion = nil
-
-        if consecutiveTimeouts >= maxTimeouts {
-            // Re-initialize adapter
-            Task {
-                try? await initializeAdapter()
+            if let continuation = responseContinuation {
+                continuation.resume(returning: response)
+                responseContinuation = nil
             }
         }
-    }
-
-    // MARK: - Adapter Initialization
-
-    /// Initialize ELM327 adapter with AT commands
-    func initializeAdapter() async throws {
-        print("Initializing adapter...")
-        connectionState = .initializing
-        consecutiveTimeouts = 0
-
-        for command in ATCommand.initSequence {
-            print("Sending: \(command.trimmingCharacters(in: .whitespacesAndNewlines))")
-            let response = try await sendCommand(command, timeout: command == ATCommand.reset ? 2.0 : 1.0)
-            print("Response: \(response.trimmingCharacters(in: .whitespacesAndNewlines))")
-
-            if command == ATCommand.reset {
-                // Wait extra time after reset
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-
-            if OBDResponse.isError(response) && command != ATCommand.reset {
-                print("Initialization failed at: \(command)")
-                throw BluetoothError.initializationFailed(command)
-            }
-        }
-
-        print("Adapter initialized successfully")
-        connectionState = .connected
-        startPolling()
-    }
-
-    // MARK: - RPM Polling
-
-    func startPolling() {
-        guard !isPolling else { return }
-        isPolling = true
-        
-        Task {
-            while isPolling {
-                await pollRPM()
-                try? await Task.sleep(nanoseconds: 70_000_000) // 70ms
-            }
-        }
-    }
-
-    func stopPolling() {
-        isPolling = false
-    }
-
-    private func pollRPM() async {
-        let command = useEVProtocol ? OBDCommand.evRPM_EGMP : OBDCommand.standardRPM
-        
-        do {
-            let response = try await sendCommand(command)
-
-                if OBDResponse.isError(response) {
-                    // Try alternate protocol
-                    if useEVProtocol {
-                        let legacyResponse = try await sendCommand(OBDCommand.evRPM_Legacy)
-                        if let rpm = OBDParser.parseEVRPM(from: legacyResponse) {
-                            await MainActor.run {
-                                self.currentRPM = rpm
-                                self.consecutiveTimeouts = 0
-                            }
-                            return
-                        }
-                    }
-                    return
-                }
-
-                // Parse RPM
-                let rpm: Int?
-                if useEVProtocol {
-                    rpm = OBDParser.parseEVRPM(from: response)
-                } else {
-                    rpm = OBDParser.parseStandardRPM(from: response)
-                }
-
-                if let rpm = rpm {
-                    await MainActor.run {
-                        self.currentRPM = rpm
-                        self.consecutiveTimeouts = 0
-                    }
-                }
-            } catch {
-                print("Polling error: \(error)")
-            }
-    }
-
-    // MARK: - Auto-Reconnect
-
-    private func scheduleReconnect() {
-        guard isAutoConnectEnabled else { return }
-
-        reconnectTimer?.invalidate()
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
-            self?.startAutoConnect()
-        }
-    }
-
-    private func saveLastConnectedDevice(_ peripheral: CBPeripheral) {
-        UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: lastDeviceUUIDKey)
     }
 }
 
 // MARK: - CBCentralManagerDelegate
 
 extension BluetoothService: CBCentralManagerDelegate {
-
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        print("centralManagerDidUpdateState: \(central.state.rawValue)")
+        print("DEBUG: centralManagerDidUpdateState: \(central.state.rawValue)")
 
         switch central.state {
         case .poweredOn:
-            print("Bluetooth powered on")
-            // Execute pending scan if requested before Bluetooth was ready
-            if pendingScan {
-                performScan()
-            } else if isAutoConnectEnabled {
-                startAutoConnect()
+            print("DEBUG: Bluetooth powered on")
+            // Auto-start scanning when Bluetooth is ready
+            if isAutoConnectEnabled && connectionState == .disconnected {
+                print("DEBUG: Bluetooth ready, starting auto-scan...")
+                startScanning()
             }
         case .poweredOff:
-            print("Bluetooth powered off")
-            pendingScan = false
-            connectionState = .error("Bluetooth is off")
+            connectionState = .error("Bluetooth is turned off")
+            cleanup()
         case .unauthorized:
-            print("Bluetooth unauthorized")
-            pendingScan = false
-            connectionState = .error("Bluetooth unauthorized")
+            connectionState = .error("Bluetooth permission denied")
         case .unsupported:
-            print("Bluetooth unsupported")
-            pendingScan = false
-            connectionState = .error("Bluetooth unsupported")
-        case .resetting:
-            print("Bluetooth resetting")
-        case .unknown:
-            print("Bluetooth state unknown")
-        @unknown default:
-            print("Bluetooth unknown state: \(central.state.rawValue)")
+            connectionState = .error("Bluetooth not supported")
+        default:
+            break
         }
     }
 
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
-                        advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        let deviceName = peripheral.name ?? "Unknown"
-        print("Discovered device: \(deviceName) - \(peripheral.identifier)")
+    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        // Filter for likely OBD adapters by name
+        let name = peripheral.name ?? ""
+        let isLikelyOBD = name.lowercased().contains("obd") ||
+                          name.lowercased().contains("elm") ||
+                          name.lowercased().contains("vlink") ||
+                          name.lowercased().contains("veepeak") ||
+                          name.lowercased().contains("car") ||
+                          name.contains("IOS-Vlink") ||
+                          name.contains("OBDII")
 
-        // Filter by name
-        guard OBDDeviceFilter.isOBDAdapter(name: peripheral.name) else {
-            print("  -> Filtered out (not OBD adapter)")
-            return
-        }
+        // Only add devices with names or likely OBD devices
+        guard !name.isEmpty || isLikelyOBD else { return }
 
-        print("  -> Matches OBD filter, adding to list")
+        let device = BluetoothDevice(peripheral: peripheral, rssi: RSSI.intValue)
 
-        // Add to discovered devices if not already present
-        if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
-            discoveredDevices.append(peripheral)
+        print("DEBUG: Discovered device: \(device.name) (RSSI: \(RSSI))")
 
-            // Auto-connect to first device if scanning for auto-connect
-            if isAutoConnectEnabled && connectionState == .scanning {
-                print("  -> Auto-connecting...")
-                connect(to: peripheral)
+        if !discoveredDevices.contains(where: { $0.id == device.id }) {
+            discoveredDevices.append(device)
+
+            // Auto-connect if enabled and device matches criteria
+            if isAutoConnectEnabled &&
+               connectionState == .scanning &&
+               shouldAutoConnect(to: device) {
+                print("DEBUG: Auto-connecting to \(device.name)...")
+                connect(to: device)
             }
         }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        print("Connected to: \(peripheral.name ?? "Unknown")")
-        saveLastConnectedDevice(peripheral)
-        connectedDeviceName = peripheral.name
-        connectionState = .connecting
-        peripheral.discoverServices(nil)
+        print("DEBUG: Connected to: \(peripheral.name ?? "Unknown")")
+        connectedPeripheral = peripheral
+        connectedDevice = discoveredDevices.first { $0.id == peripheral.identifier }
+        peripheral.delegate = self
+        connectionState = .connected
+
+        // Save for auto-reconnect
+        if let device = connectedDevice {
+            saveLastDevice(device)
+        }
+
+        // Small delay to let BLE connection stabilize before service discovery
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            peripheral.discoverServices(nil)
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
+        print("DEBUG: Failed to connect: \(error?.localizedDescription ?? "Unknown")")
         connectionState = .error(error?.localizedDescription ?? "Connection failed")
-        scheduleReconnect()
+        cleanup()
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        print("Disconnected from: \(peripheral.name ?? "Unknown"), error: \(error?.localizedDescription ?? "none")")
-        connectionState = .disconnected
-        connectedDeviceName = nil
-        stopPolling()
-        scheduleReconnect()
+        print("DEBUG: Disconnected from: \(peripheral.name ?? "Unknown"), error: \(error?.localizedDescription ?? "none")")
+        cleanup()
+
+        // Auto-reconnect after unexpected disconnect
+        if isAutoConnectEnabled && error != nil {
+            print("DEBUG: Connection lost, attempting auto-reconnect in 2s...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.startScanning()
+            }
+        }
     }
 }
 
 // MARK: - CBPeripheralDelegate
 
 extension BluetoothService: CBPeripheralDelegate {
-
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
-            print("Service discovery error: \(error.localizedDescription)")
+            print("DEBUG: Service discovery error: \(error.localizedDescription)")
+            connectionState = .error("Failed to discover services")
             return
         }
 
         guard let services = peripheral.services else {
-            print("No services found")
+            print("DEBUG: No services found")
             return
         }
 
-        print("Discovered \(services.count) services:")
+        print("DEBUG: Discovered \(services.count) services")
         for service in services {
-            print("  - Service: \(service.uuid)")
+            print("DEBUG:   - Service: \(service.uuid)")
             peripheral.discoverCharacteristics(nil, for: service)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let characteristics = service.characteristics else { return }
+        if let error = error {
+            print("DEBUG: Characteristic discovery error: \(error.localizedDescription)")
+            return
+        }
+
+        guard let characteristics = service.characteristics else {
+            return
+        }
+
+        let knownWriteUUID = ELM327UUIDs.writeCharacteristic(for: service.uuid)
+        let knownNotifyUUID = ELM327UUIDs.notifyCharacteristic(for: service.uuid)
 
         for characteristic in characteristics {
-            let uuid = characteristic.uuid
+            print("DEBUG:     - Characteristic: \(characteristic.uuid), properties: \(characteristic.properties.rawValue)")
 
-            // Check for known write characteristics by UUID
-            if uuid == OBDServiceUUID.veepeakWrite ||
-               uuid == OBDServiceUUID.genericRW ||
-               uuid == OBDServiceUUID.obdlinkWrite {
+            // Check against known UUIDs first
+            if let writeUUID = knownWriteUUID, characteristic.uuid == writeUUID {
                 writeCharacteristic = characteristic
-                print("Found write characteristic: \(uuid)")
-            }
-
-            // Check for known notify characteristics by UUID
-            if uuid == OBDServiceUUID.veepeakNotify ||
-               uuid == OBDServiceUUID.genericRW {
+                preferredWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
+                print("DEBUG: Found known write characteristic: \(characteristic.uuid)")
+            } else if let notifyUUID = knownNotifyUUID, characteristic.uuid == notifyUUID {
                 notifyCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
-                print("Found notify characteristic: \(uuid)")
+                print("DEBUG: Found known notify characteristic: \(characteristic.uuid)")
             }
 
-            // Fallback: check by properties if no known UUID matched
-            if writeCharacteristic == nil &&
-               (characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse)) {
-                writeCharacteristic = characteristic
-                print("Found write characteristic by properties: \(uuid)")
+            // Fallback to property-based discovery if not already found
+            if writeCharacteristic == nil {
+                if characteristic.properties.contains(.write) {
+                    writeCharacteristic = characteristic
+                    preferredWriteType = .withResponse
+                    print("DEBUG: Found write characteristic by properties: \(characteristic.uuid)")
+                } else if characteristic.properties.contains(.writeWithoutResponse) {
+                    writeCharacteristic = characteristic
+                    preferredWriteType = .withoutResponse
+                    print("DEBUG: Found writeWithoutResponse characteristic: \(characteristic.uuid)")
+                }
             }
 
             if notifyCharacteristic == nil && characteristic.properties.contains(.notify) {
                 notifyCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
-                print("Found notify characteristic by properties: \(uuid)")
+                print("DEBUG: Found notify characteristic by properties: \(characteristic.uuid)")
             }
         }
 
-        // If we have both characteristics, initialize
+        // Check if we have both characteristics
         if writeCharacteristic != nil && notifyCharacteristic != nil {
-            Task {
-                try? await initializeAdapter()
-            }
+            print("DEBUG: Both characteristics found. Ready for commands.")
+            connectionState = .initializing
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let data = characteristic.value,
-              let string = String(data: data, encoding: .ascii) else { return }
-
-        responseBuffer += string
-
-        // Check for response terminator
-        if responseBuffer.contains(OBDResponse.prompt) {
-            commandTimer?.invalidate()
-            let response = responseBuffer
-            responseBuffer = ""
-            commandCompletion?(response)
-            commandCompletion = nil
+        guard error == nil, let data = characteristic.value else {
+            return
         }
+
+        processReceivedData(data)
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if let error = error {
+            print("DEBUG: Write error: \(error.localizedDescription)")
+            responseContinuation?.resume(throwing: BluetoothError.writeFailed(error.localizedDescription))
+            responseContinuation = nil
+        }
+    }
+}
+
+// MARK: - BluetoothDevice
+
+/// Represents a discovered Bluetooth device
+struct BluetoothDevice: Identifiable, Hashable {
+    let id: UUID
+    let peripheral: CBPeripheral
+    let name: String
+    let rssi: Int
+
+    init(peripheral: CBPeripheral, rssi: Int) {
+        self.id = peripheral.identifier
+        self.peripheral = peripheral
+        self.name = peripheral.name ?? "Unknown Device"
+        self.rssi = rssi
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    static func == (lhs: BluetoothDevice, rhs: BluetoothDevice) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
 // MARK: - Errors
 
-enum BluetoothError: Error, LocalizedError {
+enum BluetoothError: LocalizedError {
     case notConnected
-    case initializationFailed(String)
     case timeout
+    case writeFailed(String)
+    case invalidResponse
 
     var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "Not connected to OBD adapter"
-        case .initializationFailed(let command):
-            return "Initialization failed at: \(command)"
+            return "Not connected to device"
         case .timeout:
             return "Command timeout"
+        case .writeFailed(let reason):
+            return "Write failed: \(reason)"
+        case .invalidResponse:
+            return "Invalid response received"
         }
     }
 }

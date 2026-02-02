@@ -115,14 +115,14 @@ struct SettingsView: View {
                                         .foregroundColor(.gray)
                                         .font(.caption)
 
-                                    ForEach(viewModel.bluetooth.discoveredDevices, id: \.identifier) { device in
+                                    ForEach(viewModel.bluetooth.discoveredDevices) { device in
                                         Button(action: {
                                             viewModel.bluetooth.connect(to: device)
                                         }) {
                                             HStack {
                                                 Image(systemName: "car.fill")
                                                     .foregroundColor(.neonCyan)
-                                                Text(device.name ?? "Unknown")
+                                                Text(device.name)
                                                     .foregroundColor(.white)
                                                 Spacer()
                                                 Image(systemName: "chevron.right")
