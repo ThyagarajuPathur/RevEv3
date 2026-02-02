@@ -179,11 +179,14 @@ class BluetoothService: NSObject, ObservableObject {
 
     /// Initialize ELM327 adapter with AT commands
     func initializeAdapter() async throws {
+        print("Initializing adapter...")
         connectionState = .initializing
         consecutiveTimeouts = 0
 
         for command in ATCommand.initSequence {
+            print("Sending: \(command.trimmingCharacters(in: .whitespacesAndNewlines))")
             let response = try await sendCommand(command, timeout: command == ATCommand.reset ? 2.0 : 1.0)
+            print("Response: \(response.trimmingCharacters(in: .whitespacesAndNewlines))")
 
             if command == ATCommand.reset {
                 // Wait extra time after reset
@@ -191,10 +194,12 @@ class BluetoothService: NSObject, ObservableObject {
             }
 
             if OBDResponse.isError(response) && command != ATCommand.reset {
+                print("Initialization failed at: \(command)")
                 throw BluetoothError.initializationFailed(command)
             }
         }
 
+        print("Adapter initialized successfully")
         connectionState = .connected
         startPolling()
     }
@@ -296,8 +301,16 @@ extension BluetoothService: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        let deviceName = peripheral.name ?? "Unknown"
+        print("Discovered device: \(deviceName) - \(peripheral.identifier)")
+
         // Filter by name
-        guard OBDDeviceFilter.isOBDAdapter(name: peripheral.name) else { return }
+        guard OBDDeviceFilter.isOBDAdapter(name: peripheral.name) else {
+            print("  -> Filtered out (not OBD adapter)")
+            return
+        }
+
+        print("  -> Matches OBD filter, adding to list")
 
         // Add to discovered devices if not already present
         if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
@@ -305,12 +318,14 @@ extension BluetoothService: CBCentralManagerDelegate {
 
             // Auto-connect to first device if scanning for auto-connect
             if isAutoConnectEnabled && connectionState == .scanning {
+                print("  -> Auto-connecting...")
                 connect(to: peripheral)
             }
         }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        print("Connected to: \(peripheral.name ?? "Unknown")")
         saveLastConnectedDevice(peripheral)
         connectedDeviceName = peripheral.name
         connectionState = .connecting
@@ -318,11 +333,13 @@ extension BluetoothService: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
         connectionState = .error(error?.localizedDescription ?? "Connection failed")
         scheduleReconnect()
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        print("Disconnected from: \(peripheral.name ?? "Unknown"), error: \(error?.localizedDescription ?? "none")")
         connectionState = .disconnected
         connectedDeviceName = nil
         stopPolling()
@@ -335,9 +352,19 @@ extension BluetoothService: CBCentralManagerDelegate {
 extension BluetoothService: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let services = peripheral.services else { return }
+        if let error = error {
+            print("Service discovery error: \(error.localizedDescription)")
+            return
+        }
 
+        guard let services = peripheral.services else {
+            print("No services found")
+            return
+        }
+
+        print("Discovered \(services.count) services:")
         for service in services {
+            print("  - Service: \(service.uuid)")
             peripheral.discoverCharacteristics(nil, for: service)
         }
     }
@@ -346,22 +373,35 @@ extension BluetoothService: CBPeripheralDelegate {
         guard let characteristics = service.characteristics else { return }
 
         for characteristic in characteristics {
-            // Check for write characteristic
-            if characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse) {
+            let uuid = characteristic.uuid
+
+            // Check for known write characteristics by UUID
+            if uuid == OBDServiceUUID.veepeakWrite ||
+               uuid == OBDServiceUUID.genericRW ||
+               uuid == OBDServiceUUID.obdlinkWrite {
                 writeCharacteristic = characteristic
+                print("Found write characteristic: \(uuid)")
             }
 
-            // Check for notify characteristic
-            if characteristic.properties.contains(.notify) {
+            // Check for known notify characteristics by UUID
+            if uuid == OBDServiceUUID.veepeakNotify ||
+               uuid == OBDServiceUUID.genericRW {
                 notifyCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
+                print("Found notify characteristic: \(uuid)")
             }
 
-            // Some adapters use same characteristic for read/write
-            if characteristic.uuid == OBDServiceUUID.genericRW {
+            // Fallback: check by properties if no known UUID matched
+            if writeCharacteristic == nil &&
+               (characteristic.properties.contains(.write) || characteristic.properties.contains(.writeWithoutResponse)) {
                 writeCharacteristic = characteristic
+                print("Found write characteristic by properties: \(uuid)")
+            }
+
+            if notifyCharacteristic == nil && characteristic.properties.contains(.notify) {
                 notifyCharacteristic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
+                print("Found notify characteristic by properties: \(uuid)")
             }
         }
 
