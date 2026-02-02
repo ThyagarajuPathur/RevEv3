@@ -193,7 +193,7 @@ class BluetoothService: NSObject, ObservableObject {
     func startPolling() {
         stopPolling()
 
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
             self?.pollRPM()
         }
     }

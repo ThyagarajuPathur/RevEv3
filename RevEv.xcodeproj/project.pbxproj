@@ -7,24 +7,24 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		001 /* RevEvApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 101; };
-		002 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102; };
-		003 /* MathUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103; };
-		004 /* EngineConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104; };
-		005 /* OBDData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105; };
-		006 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106; };
-		007 /* BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 107; };
-		008 /* BluetoothConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108; };
-		009 /* OBDParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109; };
-		010 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110; };
-		011 /* NeonText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111; };
-		012 /* RPMGaugeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112; };
-		013 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113; };
-		014 /* GearIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114; };
-		015 /* ThrottleBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115; };
-		016 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116; };
-		017 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 201; };
-		018 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = 202; };
+		001 /* RevEvApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 101 /* RevEvApp.swift */; };
+		002 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102 /* DashboardView.swift */; };
+		003 /* MathUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 103 /* MathUtils.swift */; };
+		004 /* EngineConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104 /* EngineConfiguration.swift */; };
+		005 /* OBDData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 105 /* OBDData.swift */; };
+		006 /* AudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106 /* AudioEngine.swift */; };
+		007 /* BluetoothService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 107 /* BluetoothService.swift */; };
+		008 /* BluetoothConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108 /* BluetoothConstants.swift */; };
+		009 /* OBDParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109 /* OBDParser.swift */; };
+		010 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110 /* DashboardViewModel.swift */; };
+		011 /* NeonText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111 /* NeonText.swift */; };
+		012 /* RPMGaugeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112 /* RPMGaugeView.swift */; };
+		013 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113 /* ConnectionStatusView.swift */; };
+		014 /* GearIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114 /* GearIndicatorView.swift */; };
+		015 /* ThrottleBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 115 /* ThrottleBarView.swift */; };
+		016 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116 /* SettingsView.swift */; };
+		017 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 201 /* Assets.xcassets */; };
+		018 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = 202 /* Sounds */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -180,7 +180,7 @@
 /* Begin PBXNativeTarget section */
 		500 /* RevEv */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 600;
+			buildConfigurationList = 600 /* Build configuration list for PBXNativeTarget "RevEv" */;
 			buildPhases = (
 				501 /* Sources */,
 				300 /* Frameworks */,
@@ -210,7 +210,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 701;
+			buildConfigurationList = 701 /* Build configuration list for PBXProject "RevEv" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -393,7 +393,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UDE3KFVY3J;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = RevEv/Info.plist;
@@ -422,7 +422,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = UDE3KFVY3J;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = RevEv/Info.plist;

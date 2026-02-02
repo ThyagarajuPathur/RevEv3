@@ -16,10 +16,15 @@ class DashboardViewModel: ObservableObject {
 
     @Published var selectedConfiguration: EngineConfiguration = .bacMono
     @Published var masterVolume: Double = 0.8
+    @Published var isAutoConnectEnabled: Bool = true {
+        didSet {
+            bluetooth.isAutoConnectEnabled = isAutoConnectEnabled
+        }
+    }
 
     // MARK: - Services
 
-    let bluetooth = BluetoothService()
+    var bluetooth = BluetoothService()
     let audioEngine = AudioEngine()
 
     // MARK: - Private Properties

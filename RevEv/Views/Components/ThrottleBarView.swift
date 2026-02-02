@@ -46,7 +46,7 @@ struct ThrottleBarView: View {
             }
         }
         .frame(height: 24)
-        .onChange(of: throttle) { _, newValue in
+        .onChange(of: throttle) { newValue in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 animatedThrottle = newValue
             }

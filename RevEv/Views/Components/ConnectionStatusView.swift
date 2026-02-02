@@ -40,7 +40,7 @@ struct ConnectionStatusView: View {
         .onAppear {
             startPulsingIfNeeded()
         }
-        .onChange(of: state) { _, _ in
+        .onChange(of: state) { _ in
             startPulsingIfNeeded()
         }
     }

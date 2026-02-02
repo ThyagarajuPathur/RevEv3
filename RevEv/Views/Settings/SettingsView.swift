@@ -51,7 +51,7 @@ struct SettingsView: View {
                         // Bluetooth Settings
                         settingsSection(title: "BLUETOOTH") {
                             // Auto-connect toggle
-                            Toggle(isOn: $viewModel.bluetooth.isAutoConnectEnabled) {
+                            Toggle(isOn: $viewModel.isAutoConnectEnabled) {
                                 VStack(alignment: .leading) {
                                     Text("Auto-Connect")
                                         .foregroundColor(.white)

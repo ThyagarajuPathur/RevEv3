@@ -97,7 +97,7 @@ struct RPMGaugeView: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .onChange(of: rpm) { _, newValue in
+        .onChange(of: rpm) { newValue in
             withAnimation(.interpolatingSpring(stiffness: 100, damping: 15)) {
                 animatedRPM = newValue
             }
@@ -129,7 +129,7 @@ struct RPMGaugeView: View {
     }
 
     private func tickMark(at angle: Double, radius: CGFloat, length: CGFloat, center: CGPoint) -> Path {
-        let radians = Angle(degrees: angle - 90).radians
+        let radians = CGFloat(Angle(degrees: angle - 90).radians)
         let innerRadius = radius
         let outerRadius = radius + length
 
@@ -146,7 +146,7 @@ struct RPMGaugeView: View {
     }
 
     private func needleShape(angle: Double, radius: CGFloat, center: CGPoint) -> Path {
-        let radians = Angle(degrees: angle - 90).radians
+        let radians = CGFloat(Angle(degrees: angle - 90).radians)
         let needleLength = radius
         let needleWidth: CGFloat = 4
 
