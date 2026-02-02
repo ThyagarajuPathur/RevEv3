@@ -33,6 +33,7 @@ class BluetoothService: NSObject, ObservableObject {
     private var useEVProtocol = true
     private var consecutiveTimeouts = 0
     private let maxTimeouts = 3
+    private var pendingScan = false
 
     // UserDefaults keys
     private let lastDeviceUUIDKey = "lastConnectedDeviceUUID"
@@ -52,12 +53,18 @@ class BluetoothService: NSObject, ObservableObject {
         print("startScanning() called, centralManager.state = \(centralManager.state.rawValue)")
 
         guard centralManager.state == .poweredOn else {
-            print("Bluetooth not powered on, state: \(centralManager.state.rawValue)")
-            connectionState = .error("Bluetooth not available")
+            print("Bluetooth not ready yet, queuing scan request...")
+            pendingScan = true
+            connectionState = .scanning  // Show scanning state in UI
             return
         }
 
+        performScan()
+    }
+
+    private func performScan() {
         print("Starting Bluetooth scan...")
+        pendingScan = false
         connectionState = .scanning
         discoveredDevices.removeAll()
 
@@ -294,17 +301,23 @@ extension BluetoothService: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             print("Bluetooth powered on")
-            if isAutoConnectEnabled {
+            // Execute pending scan if requested before Bluetooth was ready
+            if pendingScan {
+                performScan()
+            } else if isAutoConnectEnabled {
                 startAutoConnect()
             }
         case .poweredOff:
             print("Bluetooth powered off")
+            pendingScan = false
             connectionState = .error("Bluetooth is off")
         case .unauthorized:
             print("Bluetooth unauthorized")
+            pendingScan = false
             connectionState = .error("Bluetooth unauthorized")
         case .unsupported:
             print("Bluetooth unsupported")
+            pendingScan = false
             connectionState = .error("Bluetooth unsupported")
         case .resetting:
             print("Bluetooth resetting")
